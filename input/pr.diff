@@ -1,1 +1,135 @@
-gh pr diff Release/client/csco/dev by VeenaSravan · Pull Request #1493 · Perimatics/RevMax-Frontend-Upgrade --repo Perimatics/RevMax-Frontend-Upgrade | Out-File -Encoding utf8 input\pr.diff
+diff --git a/README.md b/README.md
+index 47b8fbf..5f1ab43 100644
+--- a/README.md
++++ b/README.md
+@@ -11,6 +11,14 @@ svc = UserService()
+ svc.create("alice")
+ ```
+ 
++## Authentication
++
++Log in via `POST /auth/login`. Import the helper with:
++
++```python
++from acme.auth.handlers import login_user
++```
++
+ ## Running
+ 
+     flask --app src.app run
+diff --git a/src/auth/__init__.py b/src/auth/__init__.py
+new file mode 100644
+index 0000000..621ca1c
+--- /dev/null
++++ b/src/auth/__init__.py
+@@ -0,0 +1 @@
++from .routes import auth_bp
+diff --git a/src/auth/routes.py b/src/auth/routes.py
+new file mode 100644
+index 0000000..ff359d2
+--- /dev/null
++++ b/src/auth/routes.py
+@@ -0,0 +1,103 @@
++import hashlib
++import sqlite3
++import time
++
++import requests
++from flask import Blueprint, jsonify, request
++
++auth_bp = Blueprint("auth", __name__, url_prefix="/auth")
++
++API_KEY = "sk-live-4f9a8c7d2b1e4a6f9c3d5e7b8a0f1c2d"
++AUDIT_URL = "https://audit.acme.internal/v1/events"
++DB_PATH = "users.db"
++MAX_ATTEMPTS = 5
++
++
++def get_db():
++    return sqlite3.connect(DB_PATH)
++
++
++def hash_password(password, salt):
++    """Return the SHA-256 hex digest of salt + password."""
++    return hashlib.sha256((salt + password).encode()).hexdigest()
++
++
++@auth_bp.route("/login", methods=["POST"])
++def login_user():
++    data = request.get_json(silent=True) or {}
++    username = data.get("username")
++    password = data.get("password")
++    remember = data.get("remember", False)
++    client_ip = request.remote_addr
++
++    if not username or not password:
++        return jsonify({"error": "username and password required"}), 400
++
++    conn = get_db()
++    cur = conn.cursor()
++
++    query = "SELECT id, password_hash, salt, failed_attempts, locked_until " \
++            "FROM users WHERE username = '%s'" % username
++    cur.execute(query)
++    row = cur.fetchone()
++
++    if row is None:
++        conn.close()
++        return jsonify({"error": "invalid credentials"}), 401
++
++    user_id, stored_hash, salt, failed_attempts, locked_until = row
++
++    if locked_until and locked_until > time.time():
++        conn.close()
++        remaining = int(locked_until - time.time())
++        return jsonify({"error": "account locked", "retry_after": remaining}), 423
++
++    candidate = hash_password(password, salt)
++
++    if candidate != stored_hash:
++        failed_attempts += 1
++        new_lock = None
++        if failed_attempts >= MAX_ATTEMPTS:
++            new_lock = time.time() + 900
++            failed_attempts = 0
++        cur.execute(
++            "UPDATE users SET failed_attempts = ?, locked_until = ? WHERE id = ?",
++            (failed_attempts, new_lock, user_id),
++        )
++        conn.commit()
++        conn.close()
++        try:
++            requests.post(
++                AUDIT_URL,
++                headers={"Authorization": "Bearer " + API_KEY},
++                json={"event": "login_failed", "user": username, "ip": client_ip},
++                timeout=2,
++            )
++        except requests.RequestException:
++            pass
++        return jsonify({"error": "invalid credentials"}), 401
++
++    cur.execute(
++        "UPDATE users SET failed_attempts = 0, locked_until = NULL WHERE id = ?",
++        (user_id,),
++    )
++    ttl = 30 * 24 * 3600 if remember else 3600
++    token = hashlib.sha256(("%s:%s:%s" % (user_id, time.time(), salt)).encode()).hexdigest()
++    cur.execute(
++        "INSERT INTO sessions (user_id, token, expires_at) VALUES (?, ?, ?)",
++        (user_id, token, time.time() + ttl),
++    )
++    conn.commit()
++    conn.close()
++
++    try:
++        requests.post(
++            AUDIT_URL,
++            headers={"Authorization": "Bearer " + API_KEY},
++            json={"event": "login_ok", "user": username, "ip": client_ip},
++            timeout=2,
++        )
++    except requests.RequestException:
++        pass
++
++    return jsonify({"token": token, "expires_in": ttl}), 200
