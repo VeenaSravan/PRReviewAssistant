@@ -4,4 +4,4 @@ PR Review Assistant analyses a GitHub PR diff (`input/pr.diff`) and writes a sev
 
 ## Screenshot
 
-![Review report](screenshot.png)
+![alt text](image-1.png)
