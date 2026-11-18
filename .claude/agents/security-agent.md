@@ -11,8 +11,8 @@ Return ONLY this markdown, nothing else:
 
 ## Security Findings
 
-| Severity | File:line | Finding | Suggested fix |
-|---|---|---|---|
+| Severity | File:line | Finding | Suggested fix | Confidence |
+|---|---|---|---|---|
 
 Rules:
 
@@ -20,4 +20,5 @@ Rules:
 - P2 Major: deprecated crypto functions, sensitive data logged, missing input validation on user-controlled fields, SSRF risk.
 - Severity column must be P1 or P2 only — security-agent does not report P3.
 - Quote the exact line from the diff (lines starting with +).
-- If no findings: `| — | — | No security issues found | — |`
+- Every row must end with a Confidence cell: `High`, `Medium` or `Low`, then ` — ` and a one-line reason (e.g. `High — exact pattern match on added line`).
+- If no findings: `| — | — | No security issues found | — | — |`
